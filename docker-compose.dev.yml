@@ -1,0 +1,37 @@
+version: "3"
+
+services:
+  nginx:
+    ports:
+      - 80:80
+    command: [ "nginx", "-g", "daemon off;" ]
+
+  app-api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile.dev
+    container_name: app-api
+    volumes:
+      - ./api:/app:cached
+    depends_on:
+      - db
+      - redis
+    restart: always
+    command: go run main.go
+    ports:
+      - "9999:9999"
+
+  app-redirect:
+    build:
+      context: ./redirect
+      dockerfile: Dockerfile.dev
+    container_name: app-redirect
+    volumes:
+      - ./redirect:/app:cached
+    depends_on:
+      - db
+      - redis
+    restart: always
+    command: go run main.go
+    ports:
+      - "9900:9900"

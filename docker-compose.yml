@@ -1,0 +1,121 @@
+version: "3"
+
+services:
+  db:
+    image: mariadb:10.2
+    container_name: db
+    volumes:
+      - ./db:/var/lib/mysql
+      - ./docker/mysql/my.cnf:/etc/mysql/my.cnf
+    environment:
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:-password}
+      - MYSQL_USER=${MYSQL_USER:-root}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-password}
+      - MYSQL_DATABASE=${MYSQL_DATABASE:-urlshorter}
+      - TZ=Europe/Moscow
+    restart: always
+    ports:
+      - "7153:3306" # Обязательно фаерволом разрешить только определённые адреса его
+      # Но блочим всё равно 3306 (7153 почему-то не блочится)
+      # iptables -I DOCKER-USER 1 -i eth0 -p tcp -s 1.2.3.4 --dport 3306 -j ACCEPT
+      # iptables -I DOCKER-USER 1 -i eth0 -p tcp -s 2.3.4.5 --dport 3306 -j ACCEPT
+      # iptables -I DOCKER-USER 2 -i eth0 -p tcp --dport 3306 -j DROP
+    logging:
+      driver: "json-file"
+      options:
+        max-file: "5"
+        max-size: "10m"
+    command: "$MYSQL_RUN_COMMAND"
+
+  redis:
+    container_name: redis
+    hostname: redis
+    image: redis:latest
+    volumes:
+      - ./redis:/data
+    restart: always
+
+  app-api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: app-api
+    volumes:
+      - ./api:/app:cached
+    depends_on:
+      - db
+      - redis
+    environment:
+      REDIS_ADDRESS: redis:6379
+      DB_HOST: db:3306
+      DB_USER: ${MYSQL_USER:-root}
+      DB_PASS: ${MYSQL_ROOT_PASSWORD:-password}
+      DB_NAME: ${MYSQL_DATABASE:-urlshorter}
+      RABBITMQ_URL: amqp://urlshorter:krolik221@queue:5672/
+    restart: always
+    ports:
+      - "9999:9999"
+
+  app-redirect:
+    build:
+      context: ./redirect
+      dockerfile: Dockerfile
+    container_name: app-redirect
+    volumes:
+      - ./redirect:/app:cached
+    depends_on:
+      - db
+      - redis
+    environment:
+      REDIS_ADDRESS: redis:6379
+      DB_HOST: db:3306
+      DB_USER: ${MYSQL_USER:-root}
+      DB_PASS: ${MYSQL_ROOT_PASSWORD:-password}
+      DB_NAME: ${MYSQL_DATABASE:-urlshorter}
+      RABBITMQ_URL: amqp://urlshorter:krolik221@queue:5672/
+    restart: always
+    ports:
+      - "9900:9900"
+
+  queue:
+    image: rabbitmq:latest
+    container_name: queue
+    restart: always
+    ports:
+      - "5672:5672"  # Порт RabbitMQ
+      - "15672:15672"  # Порт RabbitMQ Management Plugin
+    environment:
+      - RABBITMQ_DEFAULT_USER=urlshorter  # Имя пользователя RabbitMQ
+      - RABBITMQ_DEFAULT_PASS=krolik221  # Пароль пользователя RabbitMQ
+
+  nginx:
+    image: nginx:latest
+    container_name: nginx
+    restart: always
+    ports:
+      - "80:80"
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - app-api
+      - app-redirect
+
+  pma:
+    image: phpmyadmin/phpmyadmin
+    container_name: pma
+    links:
+      - db
+    environment:
+      PMA_HOST: db
+      PMA_PORT: 3306
+      PMA_ARBITRARY: 1
+      PMA_ABSOLUTE_URI: /pmaoffice/
+      TERM: "xterm"
+      TZ: "Europe/Moscow"
+    # Никакие порты не открываем, доступ сюда через nginx (роут /vodbadm37/), чтобы юзать https от нгинкса
+    restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-file: "5"
+        max-size: "10m"
